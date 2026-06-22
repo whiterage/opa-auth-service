@@ -3,39 +3,62 @@ package authz
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/open-policy-agent/opa/rego"
 )
 
-// Input — данные HTTP-запроса, которые политика использует для решения.
 type Input struct {
 	Method string   `json:"method"`
 	Path   string   `json:"path"`
 	Roles  []string `json:"roles"`
 }
 
-// Authorizer хранит подготовленный OPA-запрос. Его безопасно переиспользовать
-// для разных HTTP-запросов; меняется только передаваемый input.
 type Authorizer struct {
+	mu    sync.RWMutex
 	query rego.PreparedEvalQuery
 }
 
-// New компилирует политику и вызывает PrepareForEval ровно один раз.
 func New(ctx context.Context, policy string) (*Authorizer, error) {
-	query, err := rego.New(
-		rego.Query("data.authz.allow"),
-		rego.Module("authz.rego", policy),
-	).PrepareForEval(ctx)
+	query, err := prepare(ctx, policy)
 	if err != nil {
-		return nil, fmt.Errorf("prepare OPA query: %w", err)
+		return nil, err
 	}
 
 	return &Authorizer{query: query}, nil
 }
 
-// Allow вычисляет подготовленный запрос с input конкретного HTTP-запроса.
+func (a *Authorizer) Reload(ctx context.Context, policy string) error {
+	query, err := prepare(ctx, policy)
+	if err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	a.query = query
+	a.mu.Unlock()
+
+	return nil
+}
+
+func prepare(ctx context.Context, policy string) (rego.PreparedEvalQuery, error) {
+	query, err := rego.New(
+		rego.Query("data.authz.allow"),
+		rego.Module("authz.rego", policy),
+	).PrepareForEval(ctx)
+	if err != nil {
+		return rego.PreparedEvalQuery{}, fmt.Errorf("prepare OPA query: %w", err)
+	}
+
+	return query, nil
+}
+
 func (a *Authorizer) Allow(ctx context.Context, input Input) (bool, error) {
-	results, err := a.query.Eval(ctx, rego.EvalInput(input))
+	a.mu.RLock()
+	query := a.query
+	a.mu.RUnlock()
+
+	results, err := query.Eval(ctx, rego.EvalInput(input))
 	if err != nil {
 		return false, fmt.Errorf("evaluate OPA query: %w", err)
 	}

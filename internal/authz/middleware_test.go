@@ -3,9 +3,10 @@ package authz_test
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"testsbertech/internal/authz"
@@ -28,6 +29,7 @@ func TestMiddleware(t *testing.T) {
 		method     string
 		roles      []string
 		wantStatus int
+		wantError  string
 	}{
 		{
 			name:       "reader may GET",
@@ -40,12 +42,14 @@ func TestMiddleware(t *testing.T) {
 			method:     http.MethodGet,
 			roles:      []string{"guest"},
 			wantStatus: http.StatusForbidden,
+			wantError:  "forbidden",
 		},
 		{
 			name:       "reader may not POST",
 			method:     http.MethodPost,
 			roles:      []string{"reader"},
 			wantStatus: http.StatusForbidden,
+			wantError:  "forbidden",
 		},
 		{
 			name:       "admin may POST",
@@ -66,30 +70,92 @@ func TestMiddleware(t *testing.T) {
 			if response.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d; body = %q", response.Code, tt.wantStatus, response.Body.String())
 			}
+			if tt.wantError != "" {
+				var body struct {
+					Error   string `json:"error"`
+					Message string `json:"message"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+					t.Fatalf("decode error body: %v", err)
+				}
+				if body.Error != tt.wantError || body.Message == "" {
+					t.Fatalf("error body = %#v, want error %q and non-empty message", body, tt.wantError)
+				}
+			}
 		})
 	}
 }
 
-func mockJWT(roles []string) string {
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
-	claims := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(
-		`{"realm_access":{"roles":%s}}`, string(mustJSON(roles)),
-	)))
+func TestMiddlewareBuildsOPAInput(t *testing.T) {
+	decision := &recordingDecision{allowed: true}
+	handler := authz.Middleware(decision, staticRoleParser{"reader", "team-a"})(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	)
 
-	return header + "." + claims + ".mock-signature"
+	request := httptest.NewRequest(http.MethodPatch, "/resource?source=test", nil)
+	request.Header.Set("Authorization", "Bearer mock.jwt.token")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+	want := authz.Input{
+		Method: http.MethodPatch,
+		Path:   "/resource",
+		Roles:  []string{"reader", "team-a"},
+	}
+	if !reflect.DeepEqual(decision.input, want) {
+		t.Fatalf("OPA input = %#v, want %#v", decision.input, want)
+	}
 }
 
-func mustJSON(roles []string) []byte {
-	if len(roles) == 0 {
-		return []byte("[]")
-	}
+func TestMiddlewareRejectsMissingBearerToken(t *testing.T) {
+	decision := &recordingDecision{allowed: true}
+	handler := authz.Middleware(decision, staticRoleParser{"reader"})(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
 
-	result := []byte{'['}
-	for i, role := range roles {
-		if i > 0 {
-			result = append(result, ',')
-		}
-		result = fmt.Appendf(result, "%q", role)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/resource", nil))
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
 	}
-	return append(result, ']')
+	if decision.called {
+		t.Fatal("OPA decision was called without a bearer token")
+	}
+}
+
+type recordingDecision struct {
+	allowed bool
+	called  bool
+	input   authz.Input
+}
+
+func (d *recordingDecision) Allow(_ context.Context, input authz.Input) (bool, error) {
+	d.called = true
+	d.input = input
+	return d.allowed, nil
+}
+
+type staticRoleParser []string
+
+func (p staticRoleParser) ParseRoles(string) ([]string, error) {
+	return p, nil
+}
+
+func mockJWT(roles []string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	payload, _ := json.Marshal(map[string]any{
+		"realm_access": map[string]any{"roles": roles},
+	})
+	claims := base64.RawURLEncoding.EncodeToString(payload)
+
+	return header + "." + claims + ".mock-signature"
 }

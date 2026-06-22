@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 )
@@ -14,8 +15,6 @@ type RoleParser interface {
 	ParseRoles(string) ([]string, error)
 }
 
-// Middleware сначала аутентифицирует Bearer-токен, затем отдаёт данные
-// запроса OPA для авторизации.
 func Middleware(decisions DecisionMaker, tokens RoleParser) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,13 +40,27 @@ func Middleware(decisions DecisionMaker, tokens RoleParser) func(http.Handler) h
 				return
 			}
 			if !allowed {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				writeJSONError(
+					w,
+					http.StatusForbidden,
+					"forbidden",
+					"access denied by authorization policy",
+				)
 				return
 			}
 
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func writeJSONError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":   code,
+		"message": message,
+	})
 }
 
 func bearerToken(header string) (string, bool) {

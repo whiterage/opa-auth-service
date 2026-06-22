@@ -1,5 +1,6 @@
 package authz_test
 
+import rego.v1
 import data.authz.allow
 
 test_reader_can_get if {

@@ -10,8 +10,6 @@ import (
 
 var ErrInvalidToken = errors.New("invalid token")
 
-// MockJWTParser читает Keycloak-подобные claims, но намеренно не проверяет
-// подпись JWT. Для production вместо него нужен валидатор подписи и claims.
 type MockJWTParser struct{}
 
 func (MockJWTParser) ParseRoles(token string) ([]string, error) {
