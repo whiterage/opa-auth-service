@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 
-	"testsbertech/internal/authz"
+	"github.com/whiterage/opa-auth-service/internal/authz"
 )
 
 func Run(ctx context.Context) error {

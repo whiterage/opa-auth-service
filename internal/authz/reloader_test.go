@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"testsbertech/internal/authz"
+	"github.com/whiterage/opa-auth-service/internal/authz"
 )
 
 func TestPolicyHotReload(t *testing.T) {

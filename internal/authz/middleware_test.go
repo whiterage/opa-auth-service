@@ -9,8 +9,8 @@ import (
 	"reflect"
 	"testing"
 
-	"testsbertech/internal/authz"
-	"testsbertech/policy"
+	"github.com/whiterage/opa-auth-service/internal/authz"
+	"github.com/whiterage/opa-auth-service/policy"
 )
 
 func TestMiddleware(t *testing.T) {

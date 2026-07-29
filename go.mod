@@ -1,4 +1,4 @@
-module testsbertech
+module github.com/whiterage/opa-auth-service
 
 go 1.25.0
 

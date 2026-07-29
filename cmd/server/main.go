@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"testsbertech/internal/app"
+	"github.com/whiterage/opa-auth-service/internal/app"
 )
 
 func main() {
