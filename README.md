@@ -1,14 +1,14 @@
-# HTTP-сервис с авторизацией через OPA
+# HTTP service authorized by OPA
 
-Небольшой Go-сервис с защищённым эндпоинтом `GET /resource`. Bearer JWT имеет
-структуру claims Keycloak, а решение о доступе принимает встроенная библиотека
-OPA по Rego-политике.
+A small Go service with one protected endpoint, `GET /resource`. The bearer JWT carries
+Keycloak-shaped claims, and access is decided by an embedded Open Policy Agent instance
+evaluating a Rego policy — not by application code.
 
-## Как проходит запрос
+## How a request is handled
 
-1. Клиент отправляет `Authorization: Bearer <JWT>`.
-2. `MockJWTParser` извлекает роли из `realm_access.roles`.
-3. Middleware формирует OPA input:
+1. The client sends `Authorization: Bearer <JWT>`.
+2. `MockJWTParser` extracts roles from `realm_access.roles`.
+3. The middleware builds the OPA input:
 
    ```json
    {
@@ -18,42 +18,42 @@ OPA по Rego-политике.
    }
    ```
 
-4. Подготовленный OPA-запрос вычисляет `data.authz.allow`.
-5. При `allow = true` запрос передаётся обработчику, иначе возвращается `403`.
+4. The prepared OPA query evaluates `data.authz.allow`.
+5. If `allow == true`, the request reaches the handler; otherwise it gets a `403`.
 
-`PrepareForEval` вызывается при старте программы, а затем только при изменении
-файла политики. Между изменениями один `PreparedEvalQuery` переиспользуется
-всеми HTTP-запросами; внутри HTTP middleware политика не компилируется.
+`PrepareForEval` runs once at startup, and again only when the policy file changes. Between
+changes, a single `PreparedEvalQuery` is reused across every HTTP request — the policy is not
+recompiled inside the request path.
 
-## Политика доступа
+## Access policy
 
-- `admin` может выполнять любой HTTP-метод;
-- `reader` может выполнять только `GET`;
-- остальные запросы запрещены благодаря `default allow := false`.
+- `admin` can call any HTTP method.
+- `reader` can call `GET` only.
+- Everything else is denied by `default allow := false`.
 
-Рабочая политика загружается из `policy/authz.rego`. Сервис следит за файлом и
-применяет изменения без перезапуска. Если изменённая политика не компилируется,
-ошибка записывается в лог, а последняя корректная версия продолжает работать.
+The live policy loads from `policy/authz.rego`. The service watches the file and applies changes
+without a restart. If an edited policy fails to compile, the error is logged and the last valid
+version keeps serving requests.
 
-## Запуск
+## Running it
 
-Требуется Go 1.25 или новее.
+Requires Go 1.25 or newer.
 
 ```bash
 go mod download
 go run ./cmd/server
 ```
 
-Сервис запустится на `http://localhost:8080`.
+The service starts on `http://localhost:8080`.
 
-По умолчанию используется `policy/authz.rego`. Другой путь можно передать через
-переменную окружения:
+It uses `policy/authz.rego` by default. Point it at a different file with an environment
+variable:
 
 ```bash
 POLICY_PATH=/absolute/path/to/authz.rego go run ./cmd/server
 ```
 
-Разрешённый запрос с ролью `reader`:
+A request allowed by the `reader` role:
 
 ```bash
 TOKEN='eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsicmVhZGVyIl19fQ.mock-signature'
@@ -61,9 +61,9 @@ TOKEN='eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsic
 curl -i -H "Authorization: Bearer $TOKEN" http://localhost:8080/resource
 ```
 
-Ожидаемый статус: `200 OK`.
+Expected status: `200 OK`.
 
-Запрещённый запрос с ролью `guest`:
+A request denied for the `guest` role:
 
 ```bash
 TOKEN='eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsiZ3Vlc3QiXX19.mock-signature'
@@ -71,7 +71,7 @@ TOKEN='eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsiZ
 curl -i -H "Authorization: Bearer $TOKEN" http://localhost:8080/resource
 ```
 
-Ожидаемый статус: `403 Forbidden` с понятным JSON-телом:
+Expected status: `403 Forbidden`, with a JSON body:
 
 ```json
 {
@@ -80,35 +80,34 @@ curl -i -H "Authorization: Bearer $TOKEN" http://localhost:8080/resource
 }
 ```
 
-Без Bearer-токена сервис вернёт `401 Unauthorized`.
+No bearer token gets a `401 Unauthorized`.
 
-## Hot-reload политики
+## Policy hot reload
 
-После запуска измените и сохраните `policy/authz.rego`. Наблюдатель подготовит
-новый OPA-запрос и атомарно заменит текущий. Новые запросы сразу начнут
-проверяться по обновлённой политике, перезапуск сервиса не требуется.
+Start the service, then edit and save `policy/authz.rego`. The watcher prepares a new OPA query
+and swaps it in atomically — new requests are checked against the updated policy immediately,
+with no restart.
 
-`PrepareForEval` при hot-reload неизбежно вызывается повторно, но только в ответ
-на изменение политики, а не на каждый HTTP-запрос.
+`PrepareForEval` does run again on a hot reload, but only in response to the file change, never
+on a per-request basis.
 
-## Тесты
+## Tests
 
-Go-тест middleware:
+Go tests for the middleware:
 
 ```bash
 go test ./...
 ```
 
-Тесты Rego-политики требуют OPA CLI. На macOS его можно установить командой
-`brew install opa`, после чего выполнить:
+Testing the Rego policy itself needs the OPA CLI (on macOS: `brew install opa`), then:
 
 ```bash
 opa test ./policy -v
 ```
 
-## Ограничение mock JWT
+## About the mock JWT
 
-`MockJWTParser` декодирует payload JWT, но не проверяет подпись, issuer,
-audience и срок действия. Это сделано только потому, что задание разрешает
-замокать claims. В production JWT необходимо проверять по публичным ключам
-Keycloak (JWKS) до передачи ролей в OPA.
+`MockJWTParser` decodes the JWT payload but does not verify the signature, issuer, audience, or
+expiry. That's intentional scope, not an oversight — a mocked-claims parser is enough to
+demonstrate OPA-driven authorization. A real deployment would verify the JWT against Keycloak's
+public keys (JWKS) before ever handing roles to OPA.
